@@ -1,0 +1,47 @@
+name: Daily MPD Verification
+
+# 1. When should this run?
+on:
+  schedule:
+    # Runs at 13:00 UTC (9:00 AM EDT) every single day
+    - cron: '0 13 * * *'
+  # This allows you to click a button to run it manually anytime
+  workflow_dispatch: 
+
+# 2. What should it do?
+jobs:
+  build_and_deploy:
+    runs-on: ubuntu-latest
+    
+    # Grant permission to the bot to push the new files to your repo
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+          
+      - name: Install System Geospatial Dependencies
+        # Cartopy and Geopandas need these underlying C-libraries to plot maps properly
+        run: sudo apt-get update && sudo apt-get install -y libgeos-dev libproj-dev proj-data proj-bin
+
+      - name: Install Python Packages
+        run: pip install -r requirements.txt
+
+      - name: Run the Verification Script
+        run: python verify_mpds_daily.py
+
+      - name: Commit and Push the New Maps
+        run: |
+          git config --global user.name 'github-actions[bot]'
+          git config --global user.email 'github-actions[bot]@users.noreply.github.com'
+          # Add the generated index.html and the images folder
+          git add index.html images/ || echo "No files to add"
+          # Commit them (or do nothing if no new MPDs were issued)
+          git commit -m "Automated Daily MPD Update" || echo "No changes to commit"
+          git push

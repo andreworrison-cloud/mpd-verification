@@ -1,12 +1,15 @@
 #!/usr/bin/env python3
 """
-WPC MPD Verification Script (GitHub Actions Version)
-Generates verification maps for yesterday's Mesoscale Precipitation Discussions.
+WPC MPD Verification Script (GitHub Actions Version with Archive)
+Generates verification maps for yesterday's Mesoscale Precipitation Discussions
+and builds a historical HTML archive.
 """
 
-import datetime
 import os
 import requests
+import datetime
+from datetime import datetime as dt
+from collections import defaultdict
 from io import BytesIO
 
 import pandas as pd
@@ -151,52 +154,121 @@ def plot_mpd_verification(mpd_gdf, classified_ffw_gdf, counties_gdf, save_path=N
     else:
         plt.show()
 
-# --- 3. Dashboard Generator ---
+# --- 3. Dashboard Generator (Archive Version) ---
 
-def generate_dashboard_html(date_str, image_filenames, web_root_dir):
-    """Generates a static HTML dashboard to display the verification maps."""
-    html_content = f"""
-    <!DOCTYPE html>
-    <html lang="en">
-    <head>
-        <meta charset="UTF-8">
-        <meta name="viewport" content="width=device-width, initial-scale=1.0">
-        <title>WPC MPD Verification Dashboard</title>
-        <style>
-            body {{ font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background-color: #1e1e1e; color: #ffffff; margin: 0; padding: 20px; }}
-            h1 {{ text-align: center; color: #4fa8fb; border-bottom: 1px solid #444; padding-bottom: 15px; margin-bottom: 5px; }}
-            .date-header {{ text-align: center; font-size: 1.2em; color: #aaaaaa; margin-bottom: 30px; font-weight: bold; }}
-            .dashboard-grid {{ display: grid; grid-template-columns: repeat(auto-fit, minmax(500px, 1fr)); gap: 25px; max-width: 1400px; margin: 0 auto; }}
-            .map-card {{ background-color: #2a2a2a; padding: 15px; border-radius: 8px; box-shadow: 0 4px 8px rgba(0,0,0,0.5); }}
-            .map-card img {{ width: 100%; height: auto; border-radius: 4px; border: 1px solid #555; }}
-            .map-card h3 {{ margin-top: 0; font-size: 1.2em; text-align: center; color: #e0e0e0; }}
-            .no-data {{ text-align: center; font-size: 1.5em; color: #ff6b6b; margin-top: 50px; }}
-        </style>
-    </head>
-    <body>
-        <h1>Mesoscale Precipitation Discussion (MPD) Verification</h1>
-        <div class="date-header">Valid for: {date_str}</div>
-        <div class="dashboard-grid">
-    """
+def generate_dashboard_html(target_date_str, current_images, web_root_dir):
+    """Generates a static HTML dashboard with a permanent latest day and active historical archive."""
+    images_dir = os.path.join(web_root_dir, "images")
+    
+    # 1. Scan the images folder to find all historical maps
+    date_to_images = defaultdict(list)
+    if os.path.exists(images_dir):
+        for filename in os.listdir(images_dir):
+            if filename.endswith(".png") and filename.startswith("mpd_"):
+                # Filename format: mpd_YYYYMMDD_NUM.png
+                parts = filename.split('_')
+                if len(parts) >= 3:
+                    date_str_raw = parts[1]
+                    try:
+                        date_obj = dt.strptime(date_str_raw, "%Y%m%d")
+                        display_date = date_obj.strftime("%Y-%m-%d")
+                        date_to_images[display_date].append(filename)
+                    except ValueError:
+                        continue
+                        
+    # 2. Force the CURRENT run's date into the dictionary so it's always included
+    # (If it's empty, it will just show the "No MPDs" message for today only)
+    date_to_images[target_date_str] = current_images
+                        
+    # Sort dates descending (newest at the top)
+    sorted_dates = sorted(date_to_images.keys(), reverse=True)
+    
+    # 3. Build the navigation sidebar HTML
+    nav_links_html = ""
+    for d in sorted_dates:
+        # The current target date ALWAYS becomes the index.html page
+        if d == target_date_str:
+            page_name = "index.html"
+            link_text = f"{d} (Latest)"
+        else:
+            page_name = f"{d}.html"
+            link_text = d
+        nav_links_html += f'<a href="{page_name}">{link_text}</a>\n'
 
-    if not image_filenames:
-         html_content += f'<div class="no-data">No MPDs were issued for {date_str}.</div>'
-    else:
-        for img in image_filenames:
-            mpd_num = img.split('_')[2].split('.')[0]
-            html_content += f"""
-                <div class="map-card">
-                    <h3>MPD #{mpd_num}</h3>
-                    <img src="images/{img}" alt="Verification Map for MPD {mpd_num}">
-                </div>
-            """
+    # 4. Define the HTML Template
+    def create_page_content(page_date, images, nav_html):
+        images.sort() # Sort images by MPD number
+        
+        html = f"""
+        <!DOCTYPE html>
+        <html lang="en">
+        <head>
+            <meta charset="UTF-8">
+            <meta name="viewport" content="width=device-width, initial-scale=1.0">
+            <title>WPC MPD Verification Archive</title>
+            <style>
+                body {{ font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background-color: #1e1e1e; color: #ffffff; margin: 0; display: flex; height: 100vh; overflow: hidden; }}
+                /* Sidebar Styles */
+                .sidebar {{ width: 250px; background-color: #121212; padding: 20px 0; overflow-y: auto; border-right: 1px solid #333; flex-shrink: 0; }}
+                .sidebar h2 {{ text-align: center; color: #4fa8fb; font-size: 1.2em; margin-top: 0; border-bottom: 1px solid #333; padding-bottom: 15px; margin-bottom: 0; }}
+                .sidebar a {{ display: block; padding: 15px 20px; color: #aaaaaa; text-decoration: none; border-bottom: 1px solid #222; transition: 0.2s; }}
+                .sidebar a:hover {{ background-color: #2a2a2a; color: #ffffff; }}
+                .sidebar a.active-link {{ background-color: #4fa8fb; color: #121212; font-weight: bold; }}
+                
+                /* Main Content Styles */
+                .main-content {{ flex-grow: 1; padding: 20px; overflow-y: auto; background-color: #1e1e1e; }}
+                h1 {{ color: #4fa8fb; border-bottom: 1px solid #444; padding-bottom: 10px; margin-top: 0; }}
+                .date-header {{ font-size: 1.2em; color: #aaaaaa; margin-bottom: 30px; font-weight: bold; }}
+                .dashboard-grid {{ display: grid; grid-template-columns: repeat(auto-fit, minmax(500px, 1fr)); gap: 25px; max-width: 1400px; }}
+                .map-card {{ background-color: #2a2a2a; padding: 15px; border-radius: 8px; box-shadow: 0 4px 8px rgba(0,0,0,0.5); }}
+                .map-card img {{ width: 100%; height: auto; border-radius: 4px; border: 1px solid #555; }}
+                .map-card h3 {{ margin-top: 0; font-size: 1.2em; text-align: center; color: #e0e0e0; }}
+                .no-data {{ font-size: 1.2em; color: #ff6b6b; margin-top: 20px; }}
+            </style>
+        </head>
+        <body>
+            <div class="sidebar">
+                <h2>Archive Dates</h2>
+                {nav_html}
+            </div>
+            <div class="main-content">
+                <h1>WPC Mesoscale Precipitation Discussions</h1>
+                <div class="date-header">Verification for: {page_date}</div>
+                <div class="dashboard-grid">
+        """
+        
+        if not images:
+            html += f'<div class="no-data">No MPDs were issued on {page_date}.</div>'
+        else:
+            for img in images:
+                mpd_num = img.split('_')[2].split('.')[0]
+                html += f"""
+                    <div class="map-card">
+                        <h3>MPD #{mpd_num}</h3>
+                        <img src="images/{img}" alt="Verification Map for MPD {mpd_num}">
+                    </div>
+                """
+                
+        html += "</div></div></body></html>"
+        return html
 
-    html_content += "</div></body></html>"
-
-    html_filepath = os.path.join(web_root_dir, "index.html")
-    with open(html_filepath, "w") as html_file:
-        html_file.write(html_content)
-    print(f"Dashboard successfully updated at {html_filepath}")
+    # 5. Generate the HTML files
+    for d in sorted_dates:
+        # The absolute latest day is always index.html. The rest are YYYY-MM-DD.html
+        if d == target_date_str:
+            file_name = "index.html"
+        else:
+            file_name = f"{d}.html"
+            
+        filepath = os.path.join(web_root_dir, file_name)
+        
+        # Highlight the current active link in the sidebar for this specific page
+        active_nav = nav_links_html.replace(f'href="{file_name}"', f'href="{file_name}" class="active-link"')
+        
+        with open(filepath, "w") as f:
+            f.write(create_page_content(d, date_to_images[d], active_nav))
+            
+    print(f"Successfully generated dashboard. Archive contains {len(sorted_dates)} active dates.")
 
 # --- 4. Main Operational Pipeline ---
 

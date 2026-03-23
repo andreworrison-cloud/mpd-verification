@@ -1,0 +1,6 @@
+pandas
+geopandas
+matplotlib
+cartopy
+requests
+shapely

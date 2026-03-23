@@ -40,8 +40,8 @@ jobs:
         run: |
           git config --global user.name 'github-actions[bot]'
           git config --global user.email 'github-actions[bot]@users.noreply.github.com'
-          # Add the generated index.html and the images folder
-          git add index.html images/ || echo "No files to add"
+          # Add absolutely everything the script generated (including new archive HTML pages)
+          git add -A
           # Commit them (or do nothing if no new MPDs were issued)
           git commit -m "Automated Daily MPD Update" || echo "No changes to commit"
           git push

@@ -165,7 +165,6 @@ def generate_dashboard_html(target_date_str, current_images, web_root_dir):
     if os.path.exists(images_dir):
         for filename in os.listdir(images_dir):
             if filename.endswith(".png") and filename.startswith("mpd_"):
-                # Filename format: mpd_YYYYMMDD_NUM.png
                 parts = filename.split('_')
                 if len(parts) >= 3:
                     date_str_raw = parts[1]
@@ -176,18 +175,28 @@ def generate_dashboard_html(target_date_str, current_images, web_root_dir):
                     except ValueError:
                         continue
                         
-    # 2. Force the CURRENT run's date into the dictionary so it's always included
-    # (If it's empty, it will just show the "No MPDs" message for today only)
+    # 1b. Scan the root folder for past HTML files so we don't forget "quiet" days!
+    if os.path.exists(web_root_dir):
+        for filename in os.listdir(web_root_dir):
+            if filename.endswith(".html") and filename.startswith("20"):
+                # Matches format YYYY-MM-DD.html
+                past_date_str = filename.replace(".html", "")
+                # If this date isn't in our dictionary yet (because it had no PNGs), add it as an empty list
+                if past_date_str not in date_to_images:
+                    date_to_images[past_date_str] = []
+
+    # 2. Force the CURRENT run's date into the dictionary
     date_to_images[target_date_str] = current_images
                         
     # Sort dates descending (newest at the top)
     sorted_dates = sorted(date_to_images.keys(), reverse=True)
+    latest_date = sorted_dates[0]
     
     # 3. Build the navigation sidebar HTML
     nav_links_html = ""
     for d in sorted_dates:
-        # The current target date ALWAYS becomes the index.html page
-        if d == target_date_str:
+        # The newest date ALWAYS points to index.html in the menu
+        if d == latest_date:
             page_name = "index.html"
             link_text = f"{d} (Latest)"
         else:
@@ -197,7 +206,7 @@ def generate_dashboard_html(target_date_str, current_images, web_root_dir):
 
     # 4. Define the HTML Template
     def create_page_content(page_date, images, nav_html):
-        images.sort() # Sort images by MPD number
+        images.sort() 
         
         html = f"""
         <!DOCTYPE html>
@@ -254,19 +263,30 @@ def generate_dashboard_html(target_date_str, current_images, web_root_dir):
 
     # 5. Generate the HTML files
     for d in sorted_dates:
-        # The absolute latest day is always index.html. The rest are YYYY-MM-DD.html
-        if d == target_date_str:
-            file_name = "index.html"
-        else:
-            file_name = f"{d}.html"
+        # ALWAYS create a specific date file (e.g. 2026-03-23.html) so the script remembers it tomorrow!
+        file_name_specific = f"{d}.html"
+        filepath_specific = os.path.join(web_root_dir, file_name_specific)
+        
+        if d == latest_date:
+            # This is the newest day, so highlight the index.html link
+            active_nav = nav_links_html.replace('href="index.html"', 'href="index.html" class="active-link"')
+            content = create_page_content(d, date_to_images[d], active_nav)
             
-        filepath = os.path.join(web_root_dir, file_name)
-        
-        # Highlight the current active link in the sidebar for this specific page
-        active_nav = nav_links_html.replace(f'href="{file_name}"', f'href="{file_name}" class="active-link"')
-        
-        with open(filepath, "w") as f:
-            f.write(create_page_content(d, date_to_images[d], active_nav))
+            # Save as the specific date file (for the archive memory)
+            with open(filepath_specific, "w") as f:
+                f.write(content)
+                
+            # AND save as index.html (for the homepage)
+            index_filepath = os.path.join(web_root_dir, "index.html")
+            with open(index_filepath, "w") as f:
+                f.write(content)
+        else:
+            # Highlight the specific date link for older days
+            active_nav = nav_links_html.replace(f'href="{file_name_specific}"', f'href="{file_name_specific}" class="active-link"')
+            content = create_page_content(d, date_to_images[d], active_nav)
+            
+            with open(filepath_specific, "w") as f:
+                f.write(content)
             
     print(f"Successfully generated dashboard. Archive contains {len(sorted_dates)} active dates.")
 

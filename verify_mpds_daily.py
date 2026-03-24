@@ -2,7 +2,7 @@
 """
 WPC MPD Verification Script (GitHub Actions Version with Archive)
 Generates verification maps for yesterday's Mesoscale Precipitation Discussions
-and builds a historical HTML archive.
+and builds a historical HTML archive. Images are clickable for full resolution.
 """
 
 import os
@@ -230,8 +230,9 @@ def generate_dashboard_html(target_date_str, current_images, web_root_dir):
                 .date-header {{ font-size: 1.2em; color: #aaaaaa; margin-bottom: 30px; font-weight: bold; }}
                 .dashboard-grid {{ display: grid; grid-template-columns: repeat(auto-fit, minmax(500px, 1fr)); gap: 25px; max-width: 1400px; }}
                 .map-card {{ background-color: #2a2a2a; padding: 15px; border-radius: 8px; box-shadow: 0 4px 8px rgba(0,0,0,0.5); }}
-                .map-card img {{ width: 100%; height: auto; border-radius: 4px; border: 1px solid #555; }}
-                .map-card h3 {{ margin-top: 0; font-size: 1.2em; text-align: center; color: #e0e0e0; }}
+                .map-card img {{ width: 100%; height: auto; border-radius: 4px; border: 1px solid #555; transition: 0.3s; }}
+                .map-card img:hover {{ opacity: 0.8; cursor: pointer; }}
+                .map-card h3 {{ margin-top: 0; font-size: 1.2em; text-align: center; color: #e0e0e0; margin-bottom: 15px; }}
                 .no-data {{ font-size: 1.2em; color: #ff6b6b; margin-top: 20px; }}
             </style>
         </head>
@@ -254,7 +255,9 @@ def generate_dashboard_html(target_date_str, current_images, web_root_dir):
                 html += f"""
                     <div class="map-card">
                         <h3>MPD #{mpd_num}</h3>
-                        <img src="images/{img}" alt="Verification Map for MPD {mpd_num}">
+                        <a href="images/{img}" target="_blank" title="Click to view full resolution map">
+                            <img src="images/{img}" alt="Verification Map for MPD {mpd_num}">
+                        </a>
                     </div>
                 """
                 

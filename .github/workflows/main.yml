@@ -3,8 +3,8 @@ name: Daily MPD Verification
 # 1. When should this run?
 on:
   schedule:
-    # Runs at 13:00 UTC (9:00 AM EDT) every single day
-    - cron: '0 13 * * *'
+    # Runs at 12:15 UTC (8:15 AM EDT) every single day
+    - cron: '15 12 * * *'
   # This allows you to click a button to run it manually anytime
   workflow_dispatch: 
 

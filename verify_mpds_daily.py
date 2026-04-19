@@ -52,11 +52,12 @@ def fetch_iem_ffws(start_date, end_date):
     yr1, mo1, dy1 = start_date.strftime('%Y'), start_date.strftime('%m'), start_date.strftime('%d')
     yr2, mo2, dy2 = end_date.strftime('%Y'), end_date.strftime('%m'), end_date.strftime('%d')
     
+    # CRITICAL FIX: addsvs=yes forces the API to return individual EXTs/updates as separate rows
     url = (
         f"https://mesonet.agron.iastate.edu/cgi-bin/request/gis/watchwarn.py?"
         f"year1={yr1}&month1={mo1}&day1={dy1}&hour1=0&minute1=0&"
         f"year2={yr2}&month2={mo2}&day2={dy2}&hour2=23&minute2=59&"
-        f"limit0=yes&limit1=yes" 
+        f"limit0=yes&limit1=yes&addsvs=yes" 
     )
     response = requests.get(url)
     if response.status_code == 200:
@@ -64,13 +65,19 @@ def fetch_iem_ffws(start_date, end_date):
             gdf = gpd.read_file(BytesIO(response.content))
             ffw_gdf = gdf[(gdf['PHENOM'] == 'FF') & (gdf['SIG'] == 'W')].copy()
             
+            # FILTER: Keep only NEW issuances and EXTs (drop CONs, CANs to avoid clutter)
+            if 'STATUS' in ffw_gdf.columns:
+                ffw_gdf = ffw_gdf[ffw_gdf['STATUS'].isin(['NEW', 'EXT'])].copy()
+            
             # Parse traditional issue and expiration times
             ffw_gdf['issue_time'] = pd.to_datetime(ffw_gdf['ISSUED'])
             ffw_gdf['expire_time'] = pd.to_datetime(ffw_gdf['EXPIRED'])
             
-            # CRITICAL EXT FIX: Grab the actual product timestamp to catch Extensions 
+            # Catch the actual product timestamp to properly evaluate the EXT timing
             if 'UPDATED' in ffw_gdf.columns:
                 ffw_gdf['product_time'] = pd.to_datetime(ffw_gdf['UPDATED'])
+                # Fill any NaT values with the original issue_time just in case
+                ffw_gdf['product_time'] = ffw_gdf['product_time'].fillna(ffw_gdf['issue_time'])
             else:
                 ffw_gdf['product_time'] = ffw_gdf['issue_time'] # Fallback
                 

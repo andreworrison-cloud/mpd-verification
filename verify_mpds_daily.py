@@ -3,6 +3,7 @@
 WPC MPD Verification Script (GitHub Actions Version with Archive)
 Generates verification maps for yesterday's Mesoscale Precipitation Discussions
 and builds a historical HTML archive. Images are clickable for full resolution.
+Includes the latest action-time EXT logic and MPD correction filtering!
 """
 
 import os
@@ -38,6 +39,11 @@ def fetch_iem_mpds(target_date):
             gdf = gpd.read_file(BytesIO(response.content))
             gdf['start_time'] = pd.to_datetime(gdf['ISSUE'])
             gdf['end_time'] = pd.to_datetime(gdf['EXPIRE'])
+            
+            # FILTER: Remove Reissuances/Corrections to prevent double plotting
+            if not gdf.empty and 'NUM' in gdf.columns:
+                gdf = gdf.sort_values('start_time').drop_duplicates(subset=['NUM'], keep='last')
+                
             return gdf
         except Exception as e:
             print(f"No MPDs found or error parsing: {e}")
@@ -52,7 +58,6 @@ def fetch_iem_ffws(start_date, end_date):
     yr1, mo1, dy1 = start_date.strftime('%Y'), start_date.strftime('%m'), start_date.strftime('%d')
     yr2, mo2, dy2 = end_date.strftime('%Y'), end_date.strftime('%m'), end_date.strftime('%d')
     
-    # CRITICAL FIX: addsvs=yes forces the API to return individual EXTs/updates as separate rows
     url = (
         f"https://mesonet.agron.iastate.edu/cgi-bin/request/gis/watchwarn.py?"
         f"year1={yr1}&month1={mo1}&day1={dy1}&hour1=0&minute1=0&"
@@ -65,21 +70,18 @@ def fetch_iem_ffws(start_date, end_date):
             gdf = gpd.read_file(BytesIO(response.content))
             ffw_gdf = gdf[(gdf['PHENOM'] == 'FF') & (gdf['SIG'] == 'W')].copy()
             
-            # FILTER: Keep only NEW issuances and EXTs (drop CONs, CANs to avoid clutter)
+            # FILTER: Keep only NEW issuances and EXTs
             if 'STATUS' in ffw_gdf.columns:
                 ffw_gdf = ffw_gdf[ffw_gdf['STATUS'].isin(['NEW', 'EXT'])].copy()
             
-            # Parse traditional issue and expiration times
-            ffw_gdf['issue_time'] = pd.to_datetime(ffw_gdf['ISSUED'])
-            ffw_gdf['expire_time'] = pd.to_datetime(ffw_gdf['EXPIRED'])
-            
-            # Catch the actual product timestamp to properly evaluate the EXT timing
+            # THE FIX: Capture the actual action time of the specific polygon (NEW or EXT)
             if 'UPDATED' in ffw_gdf.columns:
-                ffw_gdf['product_time'] = pd.to_datetime(ffw_gdf['UPDATED'])
-                # Fill any NaT values with the original issue_time just in case
-                ffw_gdf['product_time'] = ffw_gdf['product_time'].fillna(ffw_gdf['issue_time'])
+                ffw_gdf['action_time'] = pd.to_datetime(ffw_gdf['UPDATED'])
+                ffw_gdf['action_time'] = ffw_gdf['action_time'].fillna(pd.to_datetime(ffw_gdf['ISSUED']))
             else:
-                ffw_gdf['product_time'] = ffw_gdf['issue_time'] # Fallback
+                ffw_gdf['action_time'] = pd.to_datetime(ffw_gdf['ISSUED']) # Fallback
+                
+            ffw_gdf['expire_time'] = pd.to_datetime(ffw_gdf['EXPIRED'])
                 
             return ffw_gdf
         except Exception as e:
@@ -92,7 +94,7 @@ def fetch_iem_ffws(start_date, end_date):
 # --- 2. Logic & Plotting Functions ---
 
 def classify_ffw_polygons(mpd_gdf, ffw_gdf):
-    """Classifies FFW polygons based on product issuance time and spatial overlap with an MPD."""
+    """Classifies FFW polygons based on strict action time and spatial overlap."""
     ffw_gdf['plot_color'] = 'drop' # Default state
     mpd = mpd_gdf.iloc[0]
     mpd_geom = mpd.geometry
@@ -100,23 +102,24 @@ def classify_ffw_polygons(mpd_gdf, ffw_gdf):
     mpd_end = mpd.end_time
     
     for index, ffw in ffw_gdf.iterrows():
-        # Evaluate using the exact product issuance time to catch EXTs
-        prod_time = ffw.product_time
+        # True timestamp of when the forecaster hit 'issue' for the NEW or EXT polygon
+        action_time = ffw.action_time
         ffw_expire = ffw.expire_time
         ffw_geom = ffw.geometry
         
-        # GREEN / RED: The action (NEW or EXT) occurred DURING the MPD valid timeframe
-        if mpd_start <= prod_time <= mpd_end:
+        # GREEN / RED: The specific action (NEW or EXT) occurred DURING the MPD window
+        if mpd_start <= action_time <= mpd_end:
             if ffw_geom.intersects(mpd_geom):
                 ffw_gdf.at[index, 'plot_color'] = 'green'
             elif ffw_geom.disjoint(mpd_geom):
                 ffw_gdf.at[index, 'plot_color'] = 'red'
                 
-        # ORANGE: The action occurred BEFORE, but is still active during any part of the MPD
-        elif prod_time < mpd_start and ffw_expire >= mpd_start:
+        # ORANGE: The action occurred BEFORE the MPD, but is actively ticking at the MPD start time.
+        # Spatial overlap does NOT matter here. If it is active before the MPD, it implies negative lead time!
+        elif action_time < mpd_start and ffw_expire >= mpd_start:
             ffw_gdf.at[index, 'plot_color'] = 'orange'
             
-    # FILTER: Remove any polygons that were not classified
+    # FILTER: Remove any polygons marked for drop
     ffw_gdf = ffw_gdf[ffw_gdf['plot_color'] != 'drop'].copy()
                 
     # SORT: Ensure correct z-order drawing (Green on top)
@@ -145,7 +148,8 @@ def plot_mpd_verification(mpd_gdf, classified_ffw_gdf, counties_gdf, save_path=N
         category='cultural', name='admin_1_states_provinces_lines', scale='50m', facecolor='none')
     ax.add_feature(states_provinces, edgecolor='black', linewidth=2.0, zorder=3)
     
-    counties_gdf.boundary.plot(ax=ax, edgecolor='gray', linewidth=0.5, zorder=2)
+    if not counties_gdf.empty:
+        counties_gdf.boundary.plot(ax=ax, edgecolor='gray', linewidth=0.5, zorder=2)
     
     if not classified_ffw_gdf.empty:
         classified_ffw_gdf.plot(ax=ax, color=classified_ffw_gdf['plot_color'], edgecolor='black', alpha=0.6, zorder=4)
@@ -186,9 +190,7 @@ def generate_dashboard_html(target_date_str, current_images, web_root_dir):
     if os.path.exists(web_root_dir):
         for filename in os.listdir(web_root_dir):
             if filename.endswith(".html") and filename.startswith("20"):
-                # Matches format YYYY-MM-DD.html
                 past_date_str = filename.replace(".html", "")
-                # If this date isn't in our dictionary yet (because it had no PNGs), add it as an empty list
                 if past_date_str not in date_to_images:
                     date_to_images[past_date_str] = []
 
@@ -202,7 +204,6 @@ def generate_dashboard_html(target_date_str, current_images, web_root_dir):
     # 3. Build the navigation sidebar HTML
     nav_links_html = ""
     for d in sorted_dates:
-        # The newest date ALWAYS points to index.html in the menu
         if d == latest_date:
             page_name = "index.html"
             link_text = f"{d} (Latest)"
@@ -273,25 +274,20 @@ def generate_dashboard_html(target_date_str, current_images, web_root_dir):
 
     # 5. Generate the HTML files
     for d in sorted_dates:
-        # ALWAYS create a specific date file (e.g. 2026-03-23.html) so the script remembers it tomorrow!
         file_name_specific = f"{d}.html"
         filepath_specific = os.path.join(web_root_dir, file_name_specific)
         
         if d == latest_date:
-            # This is the newest day, so highlight the index.html link
             active_nav = nav_links_html.replace('href="index.html"', 'href="index.html" class="active-link"')
             content = create_page_content(d, date_to_images[d], active_nav)
             
-            # Save as the specific date file (for the archive memory)
             with open(filepath_specific, "w") as f:
                 f.write(content)
                 
-            # AND save as index.html (for the homepage)
             index_filepath = os.path.join(web_root_dir, "index.html")
             with open(index_filepath, "w") as f:
                 f.write(content)
         else:
-            # Highlight the specific date link for older days
             active_nav = nav_links_html.replace(f'href="{file_name_specific}"', f'href="{file_name_specific}" class="active-link"')
             content = create_page_content(d, date_to_images[d], active_nav)
             
@@ -329,7 +325,11 @@ def main():
 
     print("Loading US County boundaries...")
     county_url = "https://www2.census.gov/geo/tiger/GENZ2021/shp/cb_2021_us_county_20m.zip"
-    counties_gdf = gpd.read_file(county_url)
+    try:
+        counties_gdf = gpd.read_file(county_url)
+    except Exception as e:
+        print(f"Could not load counties: {e}")
+        counties_gdf = gpd.GeoDataFrame()
 
     generated_images = []
 

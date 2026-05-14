@@ -334,7 +334,7 @@ def main():
     generated_images = []
 
     for index, single_mpd_series in mpd_gdf.iterrows():
-        single_mpd = mpd_gdf.iloc[[index]]
+        single_mpd = mpd_gdf.loc[[index]]
         mpd_id = single_mpd.iloc[0]['NUM']
         
         print(f"Evaluating spatial and temporal overlap for MPD #{mpd_id}...")
